@@ -56,7 +56,7 @@ template <typename T> METAL_FUNC T gelu(T x) {
     T x_cube = x_sq * x;
     T alpha = x + static_cast<T>(0.044715) * x_cube;
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
-    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(precise::tanh(beta)));
+    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(tanh(beta)));
 }
 template <typename T> METAL_FUNC T relu(T in){
     if (in < 0) {
@@ -67,11 +67,6 @@ template <typename T> METAL_FUNC T relu(T in){
 template <typename T> METAL_FUNC T silu(T in){
     return in / (static_cast<T>(1) + exp(-in));
 }
-template <typename T> METAL_FUNC T sigmoid(T in) {
-    return recip(static_cast<T>(1) + exp(-in));
-}
-
-#define TILE_SIZE 2
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -84,8 +79,8 @@ kernel void FN_NAME( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[tid]))); \
-} \
-kernel void FN_NAME##_##strided( \
+}\
+kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
     constant size_t &num_dims, \
     constant size_t *dims, \
@@ -98,17 +93,6 @@ kernel void FN_NAME##_##strided( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
-} \
-kernel void FN_NAME##_##tiled( \
-    constant size_t &dim, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    for (uint i = 0; i < TILE_SIZE; i++) { \
-        const uint idx = tid * TILE_SIZE + i; \
-        output[idx] = TYPENAME(FN(float(input[idx]))); \
-    } \
 }
 
 #define UNARY_OP(NAME) \
@@ -154,19 +138,14 @@ UNARY_OP(floor)
 UNARY_OP(round)
 UNARY_OP(gelu_erf)
 UNARY_OP(erf)
+UNARY_OP(tanh)
 UNARY_OP(recip)
 UNARY_OP(relu)
 UNARY_OP(sign)
-UNARY_OP(sigmoid)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
-
-// tanh may create NaN on large values, e.g. 45 rather than outputing 1.
-// This has been an issue for the encodec example.
-UNARY(precise::tanh, float, tanh_f32, tanh_f32_strided);
-UNARY(precise::tanh, half, tanh_f16, tanh_f16_strided);
 
 #if __METAL_VERSION__ >= 220
 UNARY(id, int64_t, copy_i64, copy_i64_strided)
@@ -189,14 +168,12 @@ BFLOAT_UNARY_OP(floor)
 BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
+BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
 BFLOAT_UNARY_OP(sign)
-BFLOAT_UNARY_OP(sigmoid)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 
-UNARY(precise::tanh, bfloat, tanh_bf16, tanh_bf16_strided);
-
-COPY2D(copy2d_bf16, bfloat)
+COPY2D(copy2d_bf64, bfloat)
 #endif

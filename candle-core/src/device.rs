@@ -130,26 +130,6 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
-    pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
-        match self {
-            Self::Cuda(d) => Ok(d),
-            Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
-            Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
-        }
-    }
-
-    pub fn as_metal_device(&self) -> Result<&crate::MetalDevice> {
-        match self {
-            Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
-            Self::Cpu => crate::bail!("expected a metal device, got cpu"),
-            Self::Metal(d) => Ok(d),
-        }
-    }
-
-    pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
-        Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
-    }
-
     pub fn new_metal(ordinal: usize) -> Result<Self> {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
@@ -189,22 +169,6 @@ impl Device {
 
     pub fn is_metal(&self) -> bool {
         matches!(self, Self::Metal(_))
-    }
-
-    pub fn supports_bf16(&self) -> bool {
-        match self {
-            Self::Cuda(_) | Self::Metal(_) => true,
-            Self::Cpu => false,
-        }
-    }
-
-    /// Return `BF16` for devices that support it, otherwise default to `F32`.
-    pub fn bf16_default_to_f32(&self) -> DType {
-        if self.supports_bf16() {
-            DType::BF16
-        } else {
-            DType::F32
-        }
     }
 
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
@@ -342,20 +306,6 @@ impl Device {
         }
     }
 
-    pub(crate) fn storage_from_slice<D: WithDType>(&self, data: &[D]) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(data.to_cpu_storage())),
-            Device::Cuda(device) => {
-                let storage = device.storage_from_slice(data)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.storage_from_slice(data)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
@@ -385,14 +335,6 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
-        }
-    }
-
-    pub fn synchronize(&self) -> Result<()> {
-        match self {
-            Self::Cpu => Ok(()),
-            Self::Cuda(d) => d.synchronize(),
-            Self::Metal(d) => d.synchronize(),
         }
     }
 }

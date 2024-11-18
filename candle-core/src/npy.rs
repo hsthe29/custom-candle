@@ -330,7 +330,7 @@ impl Tensor {
         path: P,
     ) -> Result<()> {
         let mut zip = zip::ZipWriter::new(File::create(path.as_ref())?);
-        let options: zip::write::FileOptions<()> =
+        let options =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         for (name, tensor) in ts.iter() {

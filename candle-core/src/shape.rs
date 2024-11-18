@@ -142,12 +142,6 @@ impl Shape {
         &self.0
     }
 
-    /// The dimension size for a specified dimension index.
-    pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
-        let dim = dim.to_index(self, "dim")?;
-        Ok(self.dims()[dim])
-    }
-
     /// The total number of elements, this is the product of all dimension sizes.
     pub fn elem_count(&self) -> usize {
         self.0.iter().product()
@@ -310,7 +304,6 @@ impl Dim for usize {
 pub enum D {
     Minus1,
     Minus2,
-    Minus(usize),
 }
 
 impl D {
@@ -318,7 +311,6 @@ impl D {
         let dim = match self {
             Self::Minus1 => -1,
             Self::Minus2 => -2,
-            Self::Minus(u) => -(*u as i32),
         };
         Error::DimOutOfRange {
             shape: shape.clone(),
@@ -335,7 +327,6 @@ impl Dim for D {
         match self {
             Self::Minus1 if rank >= 1 => Ok(rank - 1),
             Self::Minus2 if rank >= 2 => Ok(rank - 2),
-            Self::Minus(u) if *u > 0 && rank >= *u => Ok(rank - *u),
             _ => Err(self.out_of_range(shape, op)),
         }
     }
@@ -345,7 +336,6 @@ impl Dim for D {
         match self {
             Self::Minus1 => Ok(rank),
             Self::Minus2 if rank >= 1 => Ok(rank - 1),
-            Self::Minus(u) if *u > 0 && rank + 1 >= *u => Ok(rank + 1 - *u),
             _ => Err(self.out_of_range(shape, op)),
         }
     }

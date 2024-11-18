@@ -32,20 +32,6 @@
 //! Python can really add overhead in more complex workflows and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-future/) is a notorious source of headaches.
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
-//!
-//! ## Other Crates
-//!
-//! Candle consists of a number of crates. This crate holds core the common data structures but you may wish
-//! to look at the docs for the other crates which can be found here:
-//!
-//! - [candle-core](https://docs.rs/candle-core/). Core Datastructures and DataTypes.
-//! - [candle-nn](https://docs.rs/candle-nn/). Building blocks for Neural Nets.
-//! - [candle-datasets](https://docs.rs/candle-datasets/). Rust access to commonly used Datasets like MNIST.
-//! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
-//! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
-//! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
-//!
 
 #[cfg(feature = "accelerate")]
 mod accelerate;
@@ -61,14 +47,14 @@ mod custom_op;
 mod device;
 pub mod display;
 mod dtype;
-pub mod dummy_cuda_backend;
+mod dummy_cuda_backend;
 mod dummy_metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-dynamic"))]
 mod mkl;
 pub mod npy;
 pub mod op;
@@ -77,9 +63,7 @@ pub mod quantized;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
-mod sort;
 mod storage;
-pub mod streaming;
 mod strided_index;
 mod tensor;
 mod tensor_cat;
@@ -90,27 +74,24 @@ mod variable;
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
 
-pub use cpu_backend::{CpuStorage, CpuStorageRef};
-pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
+pub use cpu_backend::CpuStorage;
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
-pub use indexer::{IndexOp, TensorIndexer};
+pub use indexer::IndexOp;
 pub use layout::Layout;
 pub use shape::{Shape, D};
 pub use storage::Storage;
-pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]
-pub use cuda_backend as cuda;
+pub use cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
-pub use dummy_cuda_backend as cuda;
-
-pub use cuda::{CudaDevice, CudaStorage};
+pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
@@ -118,7 +99,7 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 #[cfg(not(feature = "metal"))]
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-dynamic"))]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

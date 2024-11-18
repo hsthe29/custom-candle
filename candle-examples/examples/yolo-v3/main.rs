@@ -1,4 +1,4 @@
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-dynamic"))]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
@@ -159,7 +159,7 @@ pub fn main() -> Result<()> {
         let net_width = darknet.width()?;
         let net_height = darknet.height()?;
 
-        let original_image = image::ImageReader::open(&image_name)?
+        let original_image = image::io::Reader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let image = {

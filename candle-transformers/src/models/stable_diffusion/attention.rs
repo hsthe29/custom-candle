@@ -358,7 +358,7 @@ impl SpatialTransformer {
         let vs_tb = vs.pp("transformer_blocks");
         for index in 0..config.depth {
             let tb = BasicTransformerBlock::new(
-                vs_tb.pp(index.to_string()),
+                vs_tb.pp(&index.to_string()),
                 inner_dim,
                 n_heads,
                 d_head,
@@ -467,24 +467,6 @@ pub struct AttentionBlock {
     config: AttentionBlockConfig,
 }
 
-// In the .safetensor weights of official Stable Diffusion 3 Medium Huggingface repo
-// https://huggingface.co/stabilityai/stable-diffusion-3-medium
-// Linear layer may use a different dimension for the weight in the linear, which is
-// incompatible with the current implementation of the nn::linear constructor.
-// This is a workaround to handle the different dimensions.
-fn get_qkv_linear(channels: usize, vs: nn::VarBuilder) -> Result<nn::Linear> {
-    match vs.get((channels, channels), "weight") {
-        Ok(_) => nn::linear(channels, channels, vs),
-        Err(_) => {
-            let weight = vs
-                .get((channels, channels, 1, 1), "weight")?
-                .reshape((channels, channels))?;
-            let bias = vs.get((channels,), "bias")?;
-            Ok(nn::Linear::new(weight, Some(bias)))
-        }
-    }
-}
-
 impl AttentionBlock {
     pub fn new(vs: nn::VarBuilder, channels: usize, config: AttentionBlockConfig) -> Result<Self> {
         let num_head_channels = config.num_head_channels.unwrap_or(channels);
@@ -496,10 +478,10 @@ impl AttentionBlock {
         } else {
             ("query", "key", "value", "proj_attn")
         };
-        let query = get_qkv_linear(channels, vs.pp(q_path))?;
-        let key = get_qkv_linear(channels, vs.pp(k_path))?;
-        let value = get_qkv_linear(channels, vs.pp(v_path))?;
-        let proj_attn = get_qkv_linear(channels, vs.pp(out_path))?;
+        let query = nn::linear(channels, channels, vs.pp(q_path))?;
+        let key = nn::linear(channels, channels, vs.pp(k_path))?;
+        let value = nn::linear(channels, channels, vs.pp(v_path))?;
+        let proj_attn = nn::linear(channels, channels, vs.pp(out_path))?;
         let span = tracing::span!(tracing::Level::TRACE, "attn-block");
         Ok(Self {
             group_norm,

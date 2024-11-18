@@ -35,6 +35,7 @@ extern "C" {
         d_rounded: u32,
         softmax_scale: f32,
 
+        total_q: u32,
         seqlen_q: u32,
         seqlen_k: u32,
         seqlen_q_rounded: u32,
@@ -45,6 +46,8 @@ extern "C" {
 
         window_size_left: c_int,
         window_size_right: c_int,
+
+        multi_processor_count: i32,
     );
 
 }

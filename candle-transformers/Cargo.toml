@@ -30,5 +30,7 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
-mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
+mkl = ["dep:intel-mkl-src", "intel-mkl-src/mkl-static-lp64-iomp", "candle/mkl", "candle-nn/mkl"]
+mkl-dynamic = ["dep:intel-mkl-src", "intel-mkl-src/mkl-dynamic-lp64-iomp", "candle/mkl-dynamic", "candle-nn/mkl-dynamic"]
 metal = ["candle/metal", "candle-nn/metal"]
+

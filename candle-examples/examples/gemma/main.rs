@@ -7,8 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::gemma::{Config as Config1, Model as Model1};
-use candle_transformers::models::gemma2::{Config as Config2, Model as Model2};
+use candle_transformers::models::gemma::{Config, Model};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -31,54 +30,6 @@ enum Which {
     InstructV1_1_2B,
     #[value(name = "1.1-7b-it")]
     InstructV1_1_7B,
-    #[value(name = "code-2b")]
-    CodeBase2B,
-    #[value(name = "code-7b")]
-    CodeBase7B,
-    #[value(name = "code-2b-it")]
-    CodeInstruct2B,
-    #[value(name = "code-7b-it")]
-    CodeInstruct7B,
-    #[value(name = "2-2b")]
-    BaseV2_2B,
-    #[value(name = "2-2b-it")]
-    InstructV2_2B,
-    #[value(name = "2-9b")]
-    BaseV2_9B,
-    #[value(name = "2-9b-it")]
-    InstructV2_9B,
-}
-
-impl Which {
-    fn is_v1(&self) -> bool {
-        match self {
-            Self::Base2B
-            | Self::Base7B
-            | Self::Instruct2B
-            | Self::Instruct7B
-            | Self::InstructV1_1_2B
-            | Self::InstructV1_1_7B
-            | Self::CodeBase2B
-            | Self::CodeBase7B
-            | Self::CodeInstruct2B
-            | Self::CodeInstruct7B => true,
-            Self::BaseV2_2B | Self::InstructV2_2B | Self::BaseV2_9B | Self::InstructV2_9B => false,
-        }
-    }
-}
-
-enum Model {
-    V1(Model1),
-    V2(Model2),
-}
-
-impl Model {
-    fn forward(&mut self, input_ids: &Tensor, pos: usize) -> candle::Result<Tensor> {
-        match self {
-            Self::V1(m) => m.forward(input_ids, pos),
-            Self::V2(m) => m.forward(input_ids, pos),
-        }
-    }
 }
 
 struct TextGeneration {
@@ -232,11 +183,8 @@ struct Args {
     repeat_last_n: usize,
 
     /// The model to use.
-    #[arg(long, default_value = "2-2b")]
+    #[arg(long, default_value = "2b")]
     which: Which,
-
-    #[arg(long)]
-    use_flash_attn: bool,
 }
 
 fn main() -> Result<()> {
@@ -276,14 +224,6 @@ fn main() -> Result<()> {
             Which::Base7B => "google/gemma-7b".to_string(),
             Which::Instruct2B => "google/gemma-2b-it".to_string(),
             Which::Instruct7B => "google/gemma-7b-it".to_string(),
-            Which::CodeBase2B => "google/codegemma-2b".to_string(),
-            Which::CodeBase7B => "google/codegemma-7b".to_string(),
-            Which::CodeInstruct2B => "google/codegemma-2b-it".to_string(),
-            Which::CodeInstruct7B => "google/codegemma-7b-it".to_string(),
-            Which::BaseV2_2B => "google/gemma-2-2b".to_string(),
-            Which::InstructV2_2B => "google/gemma-2-2b-it".to_string(),
-            Which::BaseV2_9B => "google/gemma-2-9b".to_string(),
-            Which::InstructV2_9B => "google/gemma-2-9b-it".to_string(),
         },
     };
     let repo = api.repo(Repo::with_revision(
@@ -308,6 +248,7 @@ fn main() -> Result<()> {
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+    let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
@@ -317,15 +258,7 @@ fn main() -> Result<()> {
         DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = if args.which.is_v1() {
-        let config: Config1 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-        let model = Model1::new(args.use_flash_attn, &config, vb)?;
-        Model::V1(model)
-    } else {
-        let config: Config2 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-        let model = Model2::new(args.use_flash_attn, &config, vb)?;
-        Model::V2(model)
-    };
+    let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 

@@ -1,6 +1,6 @@
 use crate::WithDType;
 use cudarc;
-use cudarc::cudnn::safe::{ConvForward, Cudnn};
+use cudarc::cudnn::safe::{Conv2dForward, Cudnn};
 use cudarc::driver::{CudaSlice, CudaView, DeviceRepr, ValidAsZeroBits};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -26,7 +26,6 @@ impl From<cudarc::driver::DriverError> for crate::Error {
 
 pub(crate) fn launch_conv2d<
     T: DeviceRepr + WithDType + ValidAsZeroBits + cudarc::cudnn::CudnnDataType,
-    Y: cudarc::cudnn::CudnnDataType,
 >(
     src: &CudaView<T>,
     src_l: &crate::Layout,
@@ -49,7 +48,7 @@ pub(crate) fn launch_conv2d<
         }
         c
     })?;
-    let conv = cudnn.create_conv2d::<Y>(
+    let conv = cudnn.create_conv2d::<T>(
         /* pad */ [params.padding as i32, params.padding as i32],
         /* stride */ [params.stride as i32, params.stride as i32],
         /* dilation */ [params.dilation as i32, params.dilation as i32],
@@ -63,18 +62,18 @@ pub(crate) fn launch_conv2d<
     ];
     // Note that `src` already starts at the proper offset.
     let x = if src_l.is_contiguous() {
-        cudnn.create_4d_tensor::<T>(
+        cudnn.create_4d_tensor(
             cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
             x_shape,
         )?
     } else {
         let s = src_l.stride();
-        cudnn.create_4d_tensor_ex::<T>(
+        cudnn.create_4d_tensor_ex(
             x_shape,
             [s[0] as i32, s[1] as i32, s[2] as i32, s[3] as i32],
         )?
     };
-    let w = cudnn.create_4d_filter::<T>(
+    let w = cudnn.create_4d_filter(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [
             params.c_out as i32,
@@ -84,11 +83,11 @@ pub(crate) fn launch_conv2d<
         ],
     )?;
     let (w_out, h_out) = (params.out_w() as i32, params.out_h() as i32);
-    let y = cudnn.create_4d_tensor::<T>(
+    let y = cudnn.create_4d_tensor(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [params.b_size as i32, params.c_out as i32, h_out, w_out],
     )?;
-    let conv2d = ConvForward {
+    let conv2d = Conv2dForward {
         conv: &conv,
         x: &x,
         w: &w,

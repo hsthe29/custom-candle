@@ -205,30 +205,38 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        let y = if q.device().is_metal() && seq_len == 1 {
-            // SDPA will do MQA for us
-            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
-        } else {
-            // Support for MQA, useful for 70B models and mistral.
-            let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
-            let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
+        // Support for MQA, useful for 70B models.
+        let k = self.repeat_kv(k)?;
+        let v = self.repeat_kv(v)?;
 
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let att = match mask {
-                None => att,
-                Some(mask) => {
-                    let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill(&att, &mask, &self.neg_inf)?
-                }
-            };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?
+        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        let att = match mask {
+            None => att,
+            Some(mask) => {
+                let mask = mask.broadcast_as(att.shape())?;
+                masked_fill(&att, &mask, &self.neg_inf)?
+            }
         };
-
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
+    }
+
+    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+        let n_rep = self.n_head / self.n_kv_head;
+        if n_rep == 1 {
+            Ok(x)
+        } else {
+            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
+            let x = x
+                .unsqueeze(2)?
+                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
+                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
+            Ok(x)
+        }
     }
 }
 
@@ -357,16 +365,13 @@ impl ModelWeights {
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings_q.dequantize(device)?;
+        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
         )?;
-        let output = match ct.tensor(reader, "output.weight", device) {
-            Ok(tensor) => tensor,
-            Err(_) => tok_embeddings_q,
-        };
+        let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");

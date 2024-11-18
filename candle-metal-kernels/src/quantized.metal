@@ -1,4 +1,3 @@
-// Imported from https://github.com/ggerganov/llama.cpp/blob/master/ggml-metal.metal
 #include <metal_stdlib>
 
 using namespace metal;

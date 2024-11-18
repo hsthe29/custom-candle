@@ -1,5 +1,3 @@
-//! Rotary Embeddings
-//!
 use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 

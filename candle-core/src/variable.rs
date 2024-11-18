@@ -34,14 +34,9 @@ impl Var {
         Ok(Self(inner))
     }
 
-    // Convert a tensor to a variable, if the tensor is already a variable then it is returned as is.
     pub fn from_tensor(t: &Tensor) -> Result<Self> {
-        if t.is_variable() {
-            Ok(Self(t.clone()))
-        } else {
-            let inner = t.make_var()?;
-            Ok(Self(inner))
-        }
+        let inner = t.make_var()?;
+        Ok(Self(inner))
     }
 
     pub fn rand_f64<S: Into<Shape>>(

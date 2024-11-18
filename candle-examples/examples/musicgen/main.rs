@@ -4,7 +4,7 @@
 // TODO: Add an offline mode.
 // TODO: Add a KV cache.
 
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-dynamic"))]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]

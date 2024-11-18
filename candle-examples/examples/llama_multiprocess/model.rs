@@ -1,14 +1,15 @@
 use candle::backend::BackendStorage;
 use candle::{CpuStorage, CustomOp1, DType, Device, IndexOp, Layout, Result, Shape, Tensor, D};
-use candle_nn::var_builder::ShardedVarBuilder as VarBuilder;
 use candle_nn::{Embedding, Linear, Module, RmsNorm};
 use cudarc::nccl::safe::{Comm, ReduceOp};
+use half::f16;
+use serde::Deserialize;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use super::MAX_SEQ_LEN;
 
-pub type Config = candle_transformers::models::llama::LlamaConfig;
+use candle_nn::var_builder::ShardedVarBuilder as VarBuilder;
 
 struct TensorParallelColumnLinear {
     linear: Linear,
@@ -25,7 +26,7 @@ impl TensorParallelColumnLinear {
 
 struct TensorParallelRowLinear {
     linear: Linear,
-    all_reduce: AllReduce,
+    comm: Rc<Comm>,
 }
 
 struct AllReduce {
@@ -35,6 +36,8 @@ struct AllReduce {
 /// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
 /// But for this example purposes, this will work
 unsafe impl Sync for AllReduce {}
+/// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
+/// But for this example purposes, this will work
 unsafe impl Send for AllReduce {}
 
 impl CustomOp1 for AllReduce {
@@ -43,7 +46,7 @@ impl CustomOp1 for AllReduce {
     }
 
     fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("AllReduce is never used on cpu")
+        todo!("implement allreduce for cpu is not necessary for single node");
     }
 
     #[cfg(feature = "cuda")]
@@ -53,49 +56,31 @@ impl CustomOp1 for AllReduce {
         l: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::WrapErr;
-        use cudarc::driver::DeviceSlice;
-        use half::{bf16, f16};
-
         let elem_count = l.shape().elem_count();
         let dev = s.device().clone();
-        let dst = match s.dtype() {
-            DType::BF16 => {
-                let s = s.as_cuda_slice::<bf16>()?;
-                let s = match l.contiguous_offsets() {
-                    Some((0, l)) if l == s.len() => s,
-                    Some(_) | None => candle::bail!("input has to be contiguous"),
-                };
-                let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
-                self.comm
-                    .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                    .map_err(candle::Error::debug)?;
-                candle::CudaStorage::wrap_cuda_slice(dst, dev)
-            }
-            DType::F16 => {
-                let s = s.as_cuda_slice::<f16>()?;
-                let s = match l.contiguous_offsets() {
-                    Some((0, l)) if l == s.len() => s,
-                    Some(_) | None => candle::bail!("input has to be contiguous"),
-                };
-                let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-                self.comm
-                    .all_reduce(s, &mut dst, &ReduceOp::Sum)
-                    .map_err(candle::Error::debug)?;
-                candle::CudaStorage::wrap_cuda_slice(dst, dev)
-            }
-            dtype => candle::bail!("unsupported dtype {dtype:?}"),
-        };
+        let s = s.as_cuda_slice::<f16>()?;
+        // let s = match l.contiguous_offsets() {
+        //     None => Err(Error::Wrapped("input has to be contiguous".into()))?,
+        //     Some((o1, o2)) => s.slice(o1..o2),
+        // };
+        let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+        self.comm.all_reduce(s, &mut dst, &ReduceOp::Sum).unwrap();
+        let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev);
         Ok((dst, l.shape().clone()))
     }
 }
 
+fn all_reduce_sum(x: &Tensor, comm: &Rc<Comm>) -> Result<Tensor> {
+    x.apply_op1(AllReduce { comm: comm.clone() })
+}
+
 impl TensorParallelRowLinear {
     fn new(linear: Linear, comm: Rc<Comm>) -> Self {
-        let all_reduce = AllReduce { comm };
-        Self { linear, all_reduce }
+        Self { linear, comm }
     }
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.linear.forward(x)?.apply_op1_no_bwd(&self.all_reduce)
+        let x = self.linear.forward(x)?;
+        all_reduce_sum(&x, &self.comm)
     }
 }
 
@@ -136,6 +121,23 @@ impl TensorParallelRowLinear {
     }
 }
 
+#[derive(Deserialize)]
+pub struct Config {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub vocab_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub rms_norm_eps: f64,
+    #[serde(default = "default_rope")]
+    pub rope_theta: f32,
+}
+
+fn default_rope() -> f32 {
+    10_000.0
+}
+
 #[derive(Clone)]
 pub struct Cache {
     #[allow(clippy::type_complexity)]
@@ -159,6 +161,7 @@ impl Cache {
             .matmul(&theta.reshape((1, theta.elem_count()))?)?;
         // This is different from the paper, see:
         // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
+        let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
         let cos = idx_theta.cos()?.to_dtype(dtype)?;
         let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Ok(Self {
@@ -194,10 +197,16 @@ struct CausalSelfAttention {
 
 impl CausalSelfAttention {
     fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let (_b_sz, _, seq_len, _hidden_size) = x.shape().dims4()?;
+        let (b_sz, _, seq_len, hidden_size) = x.shape().dims4()?;
         let cos = self.cache.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.cache.sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(x, &cos, &sin)
+        let cos = cos.broadcast_as((b_sz, 1, seq_len, hidden_size))?;
+        let sin = sin.broadcast_as((b_sz, 1, seq_len, hidden_size))?;
+        let x1 = x.narrow(D::Minus1, 0, hidden_size / 2)?;
+        let x2 = x.narrow(D::Minus1, hidden_size / 2, hidden_size / 2)?;
+        let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
+        let rope = (x.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
+        Ok(rope)
     }
 
     fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
@@ -223,16 +232,13 @@ impl CausalSelfAttention {
 
         let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let k = k
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+            .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let mut k = self.apply_rotary_emb(&k, index_pos)?;
@@ -263,14 +269,25 @@ impl CausalSelfAttention {
         let v = v.transpose(1, 2)?;
         let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
         let y = candle_flash_attn::flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?
-            .reshape((b_sz, seq_len, hidden_size))?;
+            .transpose(1, 2)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
         let n_rep = self.num_attention_heads / self.num_key_value_heads;
-        candle_transformers::utils::repeat_kv(x, n_rep)
+        if n_rep == 1 {
+            Ok(x)
+        } else {
+            let (b_sz, n_kv_head, seq_len, head_dim) = x.shape().dims4()?;
+            let x = x
+                .unsqueeze(2)?
+                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
+                .reshape((b_sz, n_kv_head, n_rep, seq_len, head_dim))?;
+            Ok(x)
+        }
     }
 
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
@@ -284,7 +301,7 @@ impl CausalSelfAttention {
             qkv_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
-            num_key_value_heads: cfg.num_key_value_heads() / comm.world_size(),
+            num_key_value_heads: cfg.num_key_value_heads / comm.world_size(),
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             cache: cache.clone(),
         })
@@ -298,6 +315,18 @@ struct Mlp {
 }
 
 impl Mlp {
+    fn new(
+        c_fc1: TensorParallelColumnLinear,
+        c_fc2: TensorParallelColumnLinear,
+        c_proj: TensorParallelRowLinear,
+    ) -> Self {
+        Self {
+            c_fc1,
+            c_fc2,
+            c_proj,
+        }
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = (silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
@@ -307,11 +336,7 @@ impl Mlp {
         let c_fc1 = TensorParallelColumnLinear::load(vb.pp("gate_proj"), comm.clone())?;
         let c_fc2 = TensorParallelColumnLinear::load(vb.pp("up_proj"), comm.clone())?;
         let c_proj = TensorParallelRowLinear::load(vb.pp("down_proj"), comm)?;
-        Ok(Self {
-            c_fc1,
-            c_fc2,
-            c_proj,
-        })
+        Ok(Self::new(c_fc1, c_fc2, c_proj))
     }
 }
 
@@ -402,8 +427,10 @@ impl Llama {
                     cfg,
                     comm.clone(),
                 )
+                .unwrap()
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
+
         Ok(Self::new(wte, blocks, norm, lm_head))
     }
 }

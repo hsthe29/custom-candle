@@ -3,7 +3,6 @@ use crate::models::with_tracing::{layer_norm, linear_b, LayerNorm, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub phi_config: PhiConfig,
     pub vision_config: VisionConfig,
@@ -167,7 +166,7 @@ impl VisionTransformer {
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(
-                    vb.pp(format!("blocks.{}", i)),
+                    vb.pp(&format!("blocks.{}", i)),
                     cfg.embed_dim,
                     cfg.num_heads,
                     cfg,
@@ -303,7 +302,6 @@ impl Module for VisionEncoder {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Model {
     pub text_model: PhiModel,
     pub vision_encoder: VisionEncoder,

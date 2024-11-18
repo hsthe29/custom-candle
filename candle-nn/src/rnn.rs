@@ -50,15 +50,11 @@ pub trait RNN {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct LSTMState {
-    pub h: Tensor,
-    pub c: Tensor,
+    h: Tensor,
+    c: Tensor,
 }
 
 impl LSTMState {
-    pub fn new(h: Tensor, c: Tensor) -> Self {
-        LSTMState { h, c }
-    }
-
     /// The hidden state vector, which is also the output of the LSTM.
     pub fn h(&self) -> &Tensor {
         &self.h
@@ -70,12 +66,6 @@ impl LSTMState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Direction {
-    Forward,
-    Backward,
-}
-
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy)]
 pub struct LSTMConfig {
@@ -84,7 +74,6 @@ pub struct LSTMConfig {
     pub b_ih_init: Option<super::Init>,
     pub b_hh_init: Option<super::Init>,
     pub layer_idx: usize,
-    pub direction: Direction,
 }
 
 impl Default for LSTMConfig {
@@ -95,7 +84,6 @@ impl Default for LSTMConfig {
             b_ih_init: Some(super::Init::Const(0.)),
             b_hh_init: Some(super::Init::Const(0.)),
             layer_idx: 0,
-            direction: Direction::Forward,
         }
     }
 }
@@ -108,7 +96,6 @@ impl LSTMConfig {
             b_ih_init: None,
             b_hh_init: None,
             layer_idx: 0,
-            direction: Direction::Forward,
         }
     }
 }
@@ -116,7 +103,7 @@ impl LSTMConfig {
 /// A Long Short-Term Memory (LSTM) layer.
 ///
 /// <https://en.wikipedia.org/wiki/Long_short-term_memory>
-#[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms, unused)]
 #[derive(Clone, Debug)]
 pub struct LSTM {
     w_ih: Tensor,
@@ -129,62 +116,6 @@ pub struct LSTM {
     dtype: DType,
 }
 
-impl LSTM {
-    /// Creates a LSTM layer.
-    pub fn new(
-        in_dim: usize,
-        hidden_dim: usize,
-        config: LSTMConfig,
-        vb: crate::VarBuilder,
-    ) -> Result<Self> {
-        let layer_idx = config.layer_idx;
-        let direction_str = match config.direction {
-            Direction::Forward => "",
-            Direction::Backward => "_reverse",
-        };
-        let w_ih = vb.get_with_hints(
-            (4 * hidden_dim, in_dim),
-            &format!("weight_ih_l{layer_idx}{direction_str}"), // Only a single layer is supported.
-            config.w_ih_init,
-        )?;
-        let w_hh = vb.get_with_hints(
-            (4 * hidden_dim, hidden_dim),
-            &format!("weight_hh_l{layer_idx}{direction_str}"), // Only a single layer is supported.
-            config.w_hh_init,
-        )?;
-        let b_ih = match config.b_ih_init {
-            Some(init) => Some(vb.get_with_hints(
-                4 * hidden_dim,
-                &format!("bias_ih_l{layer_idx}{direction_str}"),
-                init,
-            )?),
-            None => None,
-        };
-        let b_hh = match config.b_hh_init {
-            Some(init) => Some(vb.get_with_hints(
-                4 * hidden_dim,
-                &format!("bias_hh_l{layer_idx}{direction_str}"),
-                init,
-            )?),
-            None => None,
-        };
-        Ok(Self {
-            w_ih,
-            w_hh,
-            b_ih,
-            b_hh,
-            hidden_dim,
-            config,
-            device: vb.device().clone(),
-            dtype: vb.dtype(),
-        })
-    }
-
-    pub fn config(&self) -> &LSTMConfig {
-        &self.config
-    }
-}
-
 /// Creates a LSTM layer.
 pub fn lstm(
     in_dim: usize,
@@ -192,7 +123,39 @@ pub fn lstm(
     config: LSTMConfig,
     vb: crate::VarBuilder,
 ) -> Result<LSTM> {
-    LSTM::new(in_dim, hidden_dim, config, vb)
+    let layer_idx = config.layer_idx;
+    let w_ih = vb.get_with_hints(
+        (4 * hidden_dim, in_dim),
+        &format!("weight_ih_l{layer_idx}"), // Only a single layer is supported.
+        config.w_ih_init,
+    )?;
+    let w_hh = vb.get_with_hints(
+        (4 * hidden_dim, hidden_dim),
+        &format!("weight_hh_l{layer_idx}"), // Only a single layer is supported.
+        config.w_hh_init,
+    )?;
+    let b_ih = match config.b_ih_init {
+        Some(init) => {
+            Some(vb.get_with_hints(4 * hidden_dim, &format!("bias_ih_l{layer_idx}"), init)?)
+        }
+        None => None,
+    };
+    let b_hh = match config.b_hh_init {
+        Some(init) => {
+            Some(vb.get_with_hints(4 * hidden_dim, &format!("bias_hh_l{layer_idx}"), init)?)
+        }
+        None => None,
+    };
+    Ok(LSTM {
+        w_ih,
+        w_hh,
+        b_ih,
+        b_hh,
+        hidden_dim,
+        config,
+        device: vb.device().clone(),
+        dtype: vb.dtype(),
+    })
 }
 
 impl RNN for LSTM {
@@ -242,7 +205,7 @@ impl RNN for LSTM {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct GRUState {
-    pub h: Tensor,
+    h: Tensor,
 }
 
 impl GRUState {
@@ -286,7 +249,7 @@ impl GRUConfig {
 /// A Gated Recurrent Unit (GRU) layer.
 ///
 /// <https://en.wikipedia.org/wiki/Gated_recurrent_unit>
-#[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms, unused)]
 #[derive(Clone, Debug)]
 pub struct GRU {
     w_ih: Tensor,
@@ -299,56 +262,41 @@ pub struct GRU {
     dtype: DType,
 }
 
-impl GRU {
-    /// Creates a GRU layer.
-    pub fn new(
-        in_dim: usize,
-        hidden_dim: usize,
-        config: GRUConfig,
-        vb: crate::VarBuilder,
-    ) -> Result<Self> {
-        let w_ih = vb.get_with_hints(
-            (3 * hidden_dim, in_dim),
-            "weight_ih_l0", // Only a single layer is supported.
-            config.w_ih_init,
-        )?;
-        let w_hh = vb.get_with_hints(
-            (3 * hidden_dim, hidden_dim),
-            "weight_hh_l0", // Only a single layer is supported.
-            config.w_hh_init,
-        )?;
-        let b_ih = match config.b_ih_init {
-            Some(init) => Some(vb.get_with_hints(3 * hidden_dim, "bias_ih_l0", init)?),
-            None => None,
-        };
-        let b_hh = match config.b_hh_init {
-            Some(init) => Some(vb.get_with_hints(3 * hidden_dim, "bias_hh_l0", init)?),
-            None => None,
-        };
-        Ok(Self {
-            w_ih,
-            w_hh,
-            b_ih,
-            b_hh,
-            hidden_dim,
-            config,
-            device: vb.device().clone(),
-            dtype: vb.dtype(),
-        })
-    }
-
-    pub fn config(&self) -> &GRUConfig {
-        &self.config
-    }
-}
-
+/// Creates a GRU layer.
 pub fn gru(
     in_dim: usize,
     hidden_dim: usize,
     config: GRUConfig,
     vb: crate::VarBuilder,
 ) -> Result<GRU> {
-    GRU::new(in_dim, hidden_dim, config, vb)
+    let w_ih = vb.get_with_hints(
+        (3 * hidden_dim, in_dim),
+        "weight_ih_l0", // Only a single layer is supported.
+        config.w_ih_init,
+    )?;
+    let w_hh = vb.get_with_hints(
+        (3 * hidden_dim, hidden_dim),
+        "weight_hh_l0", // Only a single layer is supported.
+        config.w_hh_init,
+    )?;
+    let b_ih = match config.b_ih_init {
+        Some(init) => Some(vb.get_with_hints(3 * hidden_dim, "bias_ih_l0", init)?),
+        None => None,
+    };
+    let b_hh = match config.b_hh_init {
+        Some(init) => Some(vb.get_with_hints(3 * hidden_dim, "bias_hh_l0", init)?),
+        None => None,
+    };
+    Ok(GRU {
+        w_ih,
+        w_hh,
+        b_ih,
+        b_hh,
+        hidden_dim,
+        config,
+        device: vb.device().clone(),
+        dtype: vb.dtype(),
+    })
 }
 
 impl RNN for GRU {

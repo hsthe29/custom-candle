@@ -32,7 +32,8 @@ criterion = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
-mkl = ["dep:intel-mkl-src", "candle/mkl"]
+mkl = ["dep:intel-mkl-src", "intel-mkl-src/mkl-static-lp64-iomp", "candle/mkl"]
+mkl-dynamic = ["dep:intel-mkl-src", "intel-mkl-src/mkl-dynamic-lp64-iomp", "candle/mkl-dynamic" ]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
 
 [[bench]]

@@ -1,4 +1,4 @@
-#[cfg(feature = "mkl")]
+#[cfg(any(feature = "mkl", feature = "mkl-dynamic"))]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
@@ -126,7 +126,7 @@ fn main() -> Result<()> {
         println!("Loaded and encoded {:?}", start.elapsed());
         for idx in 0..args.n {
             let start = std::time::Instant::now();
-            let ys = model.forward(&token_ids, &token_type_ids, None)?;
+            let ys = model.forward(&token_ids, &token_type_ids)?;
             if idx == 0 {
                 println!("{ys}");
             }
@@ -163,19 +163,11 @@ fn main() -> Result<()> {
                 Ok(Tensor::new(tokens.as_slice(), device)?)
             })
             .collect::<Result<Vec<_>>>()?;
-        let attention_mask = tokens
-            .iter()
-            .map(|tokens| {
-                let tokens = tokens.get_attention_mask().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
-            })
-            .collect::<Result<Vec<_>>>()?;
 
         let token_ids = Tensor::stack(&token_ids, 0)?;
-        let attention_mask = Tensor::stack(&attention_mask, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+        let embeddings = model.forward(&token_ids, &token_type_ids)?;
         println!("generated embeddings {:?}", embeddings.shape());
         // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
         let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;

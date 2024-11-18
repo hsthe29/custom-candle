@@ -1,5 +1,3 @@
-//! Sequential Layer
-//!
 //! A sequential layer used to chain multiple layers and closures.
 use candle::{Module, Result, Tensor};
 

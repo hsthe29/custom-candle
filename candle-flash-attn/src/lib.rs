@@ -2,6 +2,7 @@ mod ffi;
 
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
+use candle::cuda_backend::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT;
 use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
@@ -139,9 +140,7 @@ impl FlashAttn {
 
         let elem_count = out_shape.elem_count();
         let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let softmax_lse = dev
-            .alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)
-            .w()?;
+        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q).w()?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -158,6 +157,10 @@ impl FlashAttn {
         if window_size_left >= 0 && window_size_right < 0 {
             window_size_right = seqlen_k as i32;
         }
+
+        let multi_processors_count = dev
+            .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+            .unwrap();
 
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
@@ -193,6 +196,7 @@ impl FlashAttn {
                 /* d */ head_size as u32,
                 /* d_rounded */ head_size_rounded as u32,
                 /* softmax_scale*/ self.softmax_scale,
+                /* total_q */ 0_u32,
                 /* seqlen_q */ seqlen_q as u32,
                 /* seqlen_k */ seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
@@ -201,6 +205,7 @@ impl FlashAttn {
                 /* is_causal */ is_causal,
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
+                /* multi_processors_count */ multi_processors_count,
             )
         }
 
@@ -434,9 +439,9 @@ impl FlashAttnVarLen {
             None => candle::bail!("seqlens_k has to be contiguous"),
         };
 
-        let q = q.as_cuda_slice::<T>()?;
-        let k = k.as_cuda_slice::<T>()?;
-        let v = v.as_cuda_slice::<T>()?;
+        let q = q.as_cuda_slice::<f16>()?;
+        let k = k.as_cuda_slice::<f16>()?;
+        let v = v.as_cuda_slice::<f16>()?;
         let q = q.slice(q_l.start_offset()..);
         let k = k.slice(k_l.start_offset()..);
         let v = v.slice(v_l.start_offset()..);
@@ -466,7 +471,7 @@ impl FlashAttnVarLen {
             candle::bail!("the last dim of v must be contiguous {v_stride:?}")
         }
 
-        let (_total_q, num_heads, head_size_og) = q_l.shape().dims3()?;
+        let (total_q, num_heads, head_size_og) = q_l.shape().dims3()?;
         let (total_k, num_heads_k, _head_size_og) = k_l.shape().dims3()?;
         let expected_kv = (total_k, num_heads_k, head_size_og);
         if expected_kv != k_l.shape().dims3()? {
@@ -548,7 +553,7 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
         let softmax_lse = dev
             .alloc_zeros::<f32>(batch_size * num_heads * self.max_seqlen_q)
             .w()?;
@@ -568,6 +573,10 @@ impl FlashAttnVarLen {
         if window_size_left >= 0 && window_size_right < 0 {
             window_size_right = self.max_seqlen_k as i32;
         }
+
+        let multi_processors_count = dev
+            .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+            .unwrap();
 
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
@@ -605,6 +614,7 @@ impl FlashAttnVarLen {
                 /* d */ head_size as u32,
                 /* d_rounded */ head_size_rounded as u32,
                 /* softmax_scale*/ self.softmax_scale,
+                /* total_q */ total_q as u32,
                 /* seqlen_q */ self.max_seqlen_q as u32,
                 /* seqlen_k */ self.max_seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
@@ -613,6 +623,7 @@ impl FlashAttnVarLen {
                 /* is_causal */ is_causal,
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
+                /* multi_processors_count */ multi_processors_count,
             )
         }
 

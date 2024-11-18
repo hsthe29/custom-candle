@@ -79,9 +79,6 @@ macro_rules! unary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self) -> Result<Self> {
             let shape = self.shape();
-            if shape.elem_count() == 0 {
-                return Ok(self.clone());
-            }
             let storage = self
                 .storage()
                 .unary_impl::<crate::op::$op_name>(self.layout())?;
@@ -95,9 +92,6 @@ macro_rules! binary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let shape = self.same_shape_binary_op(rhs, stringify!($fn_name))?;
-            if shape.elem_count() == 0 {
-                return Ok(self.clone());
-            }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
                 self.layout(),
@@ -120,9 +114,6 @@ macro_rules! binary_op_scalar {
                     .broadcast_as(self.shape())?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
-            if self.elem_count() == 0 {
-                return Ok(self.clone());
-            }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
                 self.layout(),
@@ -370,15 +361,6 @@ impl Tensor {
 
     /// Returns a new tensor with all the elements having the same specified value. Note that
     /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec2::<f64>()?, &[
-    ///     [3.5, 3.5, 3.5, 3.5],
-    ///     [3.5, 3.5, 3.5, 3.5],
-    /// ]);
-    /// # Ok::<(), candle_core::Error>(())
     pub fn full<D: crate::WithDType, S: Into<Shape>>(
         value: D,
         shape: S,
@@ -388,13 +370,6 @@ impl Tensor {
     }
 
     /// Creates a new 1D tensor from an iterator.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec1::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn from_iter<D: crate::WithDType>(
         iter: impl IntoIterator<Item = D>,
         device: &Device,
@@ -406,26 +381,12 @@ impl Tensor {
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `1` from `start`.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange(2., 5., &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec1::<f64>()?, &[2., 3., 4.]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn arange<D: crate::WithDType>(start: D, end: D, device: &Device) -> Result<Self> {
         Self::arange_step(start, end, D::one(), device)
     }
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `step` from `start`.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec1::<f64>()?, &[2.0, 2.5, 3.0, 3.5]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn arange_step<D: crate::WithDType>(
         start: D,
         end: D,
@@ -471,16 +432,6 @@ impl Tensor {
     /// Creates a new tensor initialized with values from the input vector. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
     /// If the device is cpu, no data copy is made.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec2::<f64>()?, &[
-    ///     [1., 2., 3.],
-    ///     [4., 5., 6.]
-    /// ]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
@@ -491,31 +442,12 @@ impl Tensor {
 
     /// Creates a new tensor initialized with values from the input slice. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
-    ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let values = vec![1., 2., 3., 4., 5., 6., 7., 8.];
-    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &Device::Cpu)?;
-    ///
-    /// assert_eq!(a.to_vec2::<f64>()?, &[
-    ///     [2., 3., 4.],
-    ///     [5., 6., 7.]
-    /// ]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
         array: &[D],
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let n: usize = shape.elem_count();
-        let buffer_size: usize = array.len();
-        if buffer_size != n {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
-        let storage = device.storage_from_slice(array)?;
-        let none = BackpropOp::none();
-        Ok(from_storage(storage, shape, none, false))
+        Self::new_impl(array, shape.into(), device, false)
     }
 
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
@@ -641,9 +573,9 @@ impl Tensor {
     ///
     /// * `args` - A slice of 1D tensors.
     /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
-    ///   first dimension corresponds to the cardinality of the second input and the second
-    ///   dimension corresponds to the cardinality of the first input. If ij is selected, the
-    ///   dimensions are in the same order as the cardinality of the inputs.
+    /// first dimension corresponds to the cardinality of the second input and the second
+    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
+    /// dimensions are in the same order as the cardinality of the inputs.
     ///
     /// # Examples
     ///
@@ -714,9 +646,6 @@ impl Tensor {
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn affine(&self, mul: f64, add: f64) -> Result<Self> {
-        if self.elem_count() == 0 {
-            return Ok(self.clone());
-        }
         let storage = self.storage().affine(self.layout(), mul, add)?;
         let op = BackpropOp::new1(self, |arg| Op::Affine { arg, mul, add });
         Ok(from_storage(storage, self.shape(), op, false))
@@ -724,9 +653,6 @@ impl Tensor {
 
     /// Applies the Exponential Linear Unit (ELU) function on each element of the input tensor.
     pub fn elu(&self, alpha: f64) -> Result<Self> {
-        if self.elem_count() == 0 {
-            return Ok(self.clone());
-        }
         let storage = self.storage().elu(self.layout(), alpha)?;
         let op = BackpropOp::new1(self, |t| Op::Elu(t, alpha));
         Ok(from_storage(storage, self.shape(), op, false))
@@ -734,9 +660,6 @@ impl Tensor {
 
     /// Raise the tensor to some float exponent `e`.
     pub fn powf(&self, e: f64) -> Result<Self> {
-        if self.elem_count() == 0 {
-            return Ok(self.clone());
-        }
         let storage = self.storage().powf(self.layout(), e)?;
         let op = BackpropOp::new1(self, |t| Op::Powf(t, e));
         Ok(from_storage(storage, self.shape(), op, false))
@@ -783,30 +706,6 @@ impl Tensor {
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
-    /// ```
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[
-    ///     [0f32, 1., 2.],
-    ///     [3.  , 4., 5.],
-    ///     [6.  , 7., 8.]
-    /// ], &Device::Cpu)?;
-    ///
-    /// let b = a.narrow(0, 1, 2)?;
-    /// assert_eq!(b.shape().dims(), &[2, 3]);
-    /// assert_eq!(b.to_vec2::<f32>()?, &[
-    ///     [3., 4., 5.],
-    ///     [6., 7., 8.]
-    /// ]);
-    ///
-    /// let c = a.narrow(1, 1, 1)?;
-    /// assert_eq!(c.shape().dims(), &[3, 1]);
-    /// assert_eq!(c.to_vec2::<f32>()?, &[
-    ///     [1.],
-    ///     [4.],
-    ///     [7.]
-    /// ]);
-    /// # Ok::<(), candle_core::Error>(())
-    /// ```
     pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
         let dims = self.dims();
         let dim = dim.to_index(self.shape(), "narrow")?;
@@ -1255,9 +1154,6 @@ impl Tensor {
         let n = b_dims[dim - 1];
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
-        if c_shape.elem_count() == 0 || k == 0 {
-            return Tensor::zeros(c_shape, self.dtype(), self.device());
-        }
         let batching: usize = a_dims[..dim - 2].iter().product();
         let batching_b: usize = b_dims[..dim - 2].iter().product();
         if k != k2 || batching != batching_b {
@@ -1520,15 +1416,14 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `self` - The input tensor.
-    /// * `indexes` - The indices of elements to gather, this should have same number of dimensions as `self`
-    ///   and indexes.dims()[d] <= self.dims()[d] for all dimensions d != dim
+    /// * `indexes` - The indices of elements to gather, this should have the same shape as `self`
+    ///   but can have a different number of elements on the target dimension.
     /// * `dim` - the target dimension.
     ///
     /// The resulting tensor has the same shape as `indexes` and use values from `self` indexed on
     /// dimension `dim` by the values in `indexes`.
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "gather")?;
-
         let self_dims = self.dims();
         let indexes_dims = indexes.dims();
         let mismatch = if indexes_dims.len() != self_dims.len() {
@@ -1536,7 +1431,7 @@ impl Tensor {
         } else {
             let mut mismatch = false;
             for (i, (&d1, &d2)) in self_dims.iter().zip(indexes_dims.iter()).enumerate() {
-                if i != dim && d1 < d2 {
+                if i != dim && d1 != d2 {
                     mismatch = true;
                     break;
                 }
@@ -2026,11 +1921,7 @@ impl Tensor {
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 _ => {
-                    bail!(
-                        "not implemented yet, self.device: {:?}, device: {:?}",
-                        self.device(),
-                        device
-                    )
+                    bail!("not implemented yet")
                 }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
@@ -2520,19 +2411,9 @@ impl Tensor {
 
     /// Returns log(sum(exp(tensor), dim)).
     pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
-        let sum_dims = sum_dims.to_indexes(self.shape(), "log-sum-exp")?;
-        if sum_dims.is_empty() {
-            return Ok(self.clone());
-        }
-        let max = sum_dims[1..]
-            .iter()
-            .try_fold(self.max_keepdim(sum_dims[0])?, |max, &dim| {
-                max.max_keepdim(dim)
-            })?;
-        let exp = self.broadcast_sub(&max)?.exp()?;
-        let sum = exp.sum(sum_dims.clone())?;
-
-        sum.log()? + max.squeeze_dims(&sum_dims)
+        let exp = self.exp()?;
+        let sum = exp.sum(sum_dims)?;
+        sum.log()
     }
 
     /// Pointwise pow operation.

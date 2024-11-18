@@ -1,5 +1,3 @@
-//! Loss Calculations
-//!
 use candle::{Result, Tensor};
 
 /// The negative log likelihood loss.
